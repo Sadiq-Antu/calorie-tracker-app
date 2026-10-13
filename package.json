@@ -10,7 +10,10 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "ship": "node scripts/sync-and-publish.mjs ship",
+    "rollback": "node scripts/sync-and-publish.mjs rollback",
+    "history:commits": "node scripts/sync-and-publish.mjs history"
   },
   "dependencies": {
     "firebase": "^11.3.1",
