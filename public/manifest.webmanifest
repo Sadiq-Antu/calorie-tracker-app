@@ -1,0 +1,49 @@
+{
+  "id": "/",
+  "name": "NutriPulse — Calorie & Macro Tracker",
+  "short_name": "NutriPulse",
+  "description": "Cloud-first, offline-capable calorie and macronutrient tracker with verified nutrition data, custom recipes, and full data portability.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#020617",
+  "theme_color": "#059669",
+  "categories": ["health", "fitness", "food", "lifestyle"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Log Food",
+      "short_name": "Log Food",
+      "description": "Quickly log a meal or snack",
+      "url": "/?action=add-food",
+      "icons": [{ "src": "/icons/icon-192.svg", "sizes": "192x192", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Food Diary",
+      "short_name": "Diary",
+      "description": "View today's food diary",
+      "url": "/?tab=dashboard",
+      "icons": [{ "src": "/icons/icon-192.svg", "sizes": "192x192", "type": "image/svg+xml" }]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 min-h-screen;
+  }
+}
+
+/* Ensure touch targets are comfortable on mobile devices */
+button,
+select,
+input[type="date"],
+input[type="time"] {
+  touch-action: manipulation;
+}

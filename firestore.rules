@@ -1,0 +1,360 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // Helper Functions for Authentication, Ownership, and Schema Validation
+    // =========================================================================
+
+    function isAuthenticated() {
+      return request.auth != null && request.auth.uid is string && request.auth.uid.size() > 0;
+    }
+
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function isValidIsoString(val) {
+      return val is string && val.size() >= 10 && val.size() <= 40;
+    }
+
+    function isValidDateString(val) {
+      return val is string && val.size() == 10 && val.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function isNonNegativeNumber(val, maxVal) {
+      return (val is int || val is float) && val >= 0 && val <= maxVal;
+    }
+
+    function isPositiveNumber(val, maxVal) {
+      return (val is int || val is float) && val > 0 && val <= maxVal;
+    }
+
+    function isValidMealType(val) {
+      return val in ['breakfast', 'lunch', 'dinner', 'snacks'];
+    }
+
+    function isValidUnit(val) {
+      return val in ['g', 'ml', 'oz', 'lb', 'fl_oz', 'cup', 'tbsp', 'tsp', 'serving', 'piece', 'slice', 'bowl'];
+    }
+
+    function isValidDataQuality(val) {
+      return val in ['verified', 'verified_label', 'user_estimate', 'ai_estimate'];
+    }
+
+    function isValidSourceType(val) {
+      return val in ['reference_db', 'manual', 'recipe', 'saved_meal', 'ai_recognition'];
+    }
+
+    function isValidNutritionMap(nutr) {
+      return nutr is map
+        && nutr.keys().hasAll(['calories', 'proteinGrams', 'carbsGrams', 'fatGrams'])
+        && nutr.keys().hasOnly(['calories', 'proteinGrams', 'carbsGrams', 'fatGrams', 'fiberGrams', 'sugarGrams', 'sodiumMg'])
+        && isNonNegativeNumber(nutr.calories, 50000)
+        && isNonNegativeNumber(nutr.proteinGrams, 5000)
+        && isNonNegativeNumber(nutr.carbsGrams, 5000)
+        && isNonNegativeNumber(nutr.fatGrams, 5000)
+        && (!('fiberGrams' in nutr) || nutr.fiberGrams == null || isNonNegativeNumber(nutr.fiberGrams, 2000))
+        && (!('sugarGrams' in nutr) || nutr.sugarGrams == null || isNonNegativeNumber(nutr.sugarGrams, 5000))
+        && (!('sodiumMg' in nutr) || nutr.sodiumMg == null || isNonNegativeNumber(nutr.sodiumMg, 100000));
+    }
+
+    function isValidMacroGoals(goals) {
+      return goals is map
+        && goals.keys().hasAll(['proteinGrams', 'carbsGrams', 'fatGrams'])
+        && goals.keys().hasOnly(['proteinGrams', 'carbsGrams', 'fatGrams'])
+        && isNonNegativeNumber(goals.proteinGrams, 2000)
+        && isNonNegativeNumber(goals.carbsGrams, 2000)
+        && isNonNegativeNumber(goals.fatGrams, 2000);
+    }
+
+    // =========================================================================
+    // 1. User Profile & Goals Document: users/{uid}
+    // =========================================================================
+    match /users/{uid} {
+      function isValidUserProfile(data) {
+        let requiredKeys = [
+          'uid',
+          'displayName',
+          'email',
+          'preferredUnits',
+          'dailyCalorieGoal',
+          'macroGoals',
+          'onboardingCompleted',
+          'createdAt',
+          'updatedAt'
+        ];
+        let allowedKeys = [
+          'uid',
+          'displayName',
+          'email',
+          'photoURL',
+          'preferredUnits',
+          'dailyCalorieGoal',
+          'macroGoals',
+          'dietaryPreferences',
+          'dietaryNotes',
+          'weightGoal',
+          'optionalMetrics',
+          'themePreference',
+          'onboardingCompleted',
+          'schemaVersion',
+          'createdAt',
+          'updatedAt'
+        ];
+        return data.keys().hasAll(requiredKeys)
+          && data.keys().hasOnly(allowedKeys)
+          && data.uid == uid
+          && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+          && data.email is string && data.email.size() <= 254
+          && data.preferredUnits in ['metric', 'imperial']
+          && (data.dailyCalorieGoal is int || data.dailyCalorieGoal is float)
+          && data.dailyCalorieGoal >= 500 && data.dailyCalorieGoal <= 15000
+          && isValidMacroGoals(data.macroGoals)
+          && data.onboardingCompleted is bool
+          && isValidIsoString(data.createdAt)
+          && isValidIsoString(data.updatedAt)
+          && (!('photoURL' in data) || data.photoURL == null || (data.photoURL is string && data.photoURL.size() <= 1024))
+          && (!('dietaryPreferences' in data) || (data.dietaryPreferences is list && data.dietaryPreferences.size() <= 15))
+          && (!('dietaryNotes' in data) || (data.dietaryNotes is string && data.dietaryNotes.size() <= 500))
+          && (!('themePreference' in data) || data.themePreference in ['light', 'dark', 'system'])
+          && (!('weightGoal' in data) || data.weightGoal == null || data.weightGoal is map)
+          && (!('optionalMetrics' in data) || data.optionalMetrics == null || data.optionalMetrics is map)
+          && (!('schemaVersion' in data) || data.schemaVersion is int);
+      }
+
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && isValidUserProfile(request.resource.data);
+      allow update: if isOwner(uid)
+        && isValidUserProfile(request.resource.data)
+        && request.resource.data.uid == resource.data.uid;
+      allow delete: if isOwner(uid);
+
+      // =======================================================================
+      // 2. Food Diary Entries: users/{uid}/foodEntries/{entryId}
+      // =======================================================================
+      match /foodEntries/{entryId} {
+        function isValidFoodEntry(data) {
+          let requiredKeys = [
+            'id',
+            'uid',
+            'date',
+            'mealType',
+            'loggedAt',
+            'name',
+            'quantity',
+            'unit',
+            'servingGrams',
+            'servingDescription',
+            'nutrition',
+            'dataQuality',
+            'sourceType',
+            'createdAt',
+            'updatedAt'
+          ];
+          let allowedKeys = [
+            'id',
+            'uid',
+            'date',
+            'mealType',
+            'loggedAt',
+            'name',
+            'brand',
+            'referenceId',
+            'quantity',
+            'unit',
+            'servingGrams',
+            'servingDescription',
+            'nutrition',
+            'baseNutritionPer100g',
+            'dataQuality',
+            'sourceType',
+            'notes',
+            'aiMetadata',
+            'createdAt',
+            'updatedAt'
+          ];
+          return data.keys().hasAll(requiredKeys)
+            && data.keys().hasOnly(allowedKeys)
+            && data.id == entryId
+            && data.uid == uid
+            && isValidDateString(data.date)
+            && isValidMealType(data.mealType)
+            && data.loggedAt is string && data.loggedAt.size() >= 1 && data.loggedAt.size() <= 40
+            && data.name is string && data.name.size() >= 1 && data.name.size() <= 200
+            && isPositiveNumber(data.quantity, 10000)
+            && isValidUnit(data.unit)
+            && isNonNegativeNumber(data.servingGrams, 50000)
+            && data.servingDescription is string && data.servingDescription.size() <= 120
+            && isValidNutritionMap(data.nutrition)
+            && isValidDataQuality(data.dataQuality)
+            && isValidSourceType(data.sourceType)
+            && isValidIsoString(data.createdAt)
+            && isValidIsoString(data.updatedAt)
+            && (!('brand' in data) || data.brand == null || (data.brand is string && data.brand.size() <= 120))
+            && (!('referenceId' in data) || data.referenceId == null || (data.referenceId is string && data.referenceId.size() <= 100))
+            && (!('notes' in data) || data.notes == null || (data.notes is string && data.notes.size() <= 500))
+            && (!('baseNutritionPer100g' in data) || data.baseNutritionPer100g == null || isValidNutritionMap(data.baseNutritionPer100g))
+            && (!('aiMetadata' in data) || data.aiMetadata == null || data.aiMetadata is map);
+        }
+
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid) && isValidFoodEntry(request.resource.data);
+        allow update: if isOwner(uid)
+          && isValidFoodEntry(request.resource.data)
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.id == resource.data.id;
+        allow delete: if isOwner(uid);
+      }
+
+      // =======================================================================
+      // 3. Custom Recipes: users/{uid}/recipes/{recipeId}
+      // =======================================================================
+      match /recipes/{recipeId} {
+        function isValidRecipe(data) {
+          let requiredKeys = [
+            'id',
+            'uid',
+            'name',
+            'servingsCount',
+            'totalWeightGrams',
+            'ingredients',
+            'nutritionPerServing',
+            'dataQuality',
+            'createdAt',
+            'updatedAt'
+          ];
+          let allowedKeys = [
+            'id',
+            'uid',
+            'name',
+            'servingsCount',
+            'totalWeightGrams',
+            'ingredients',
+            'nutritionPerServing',
+            'dataQuality',
+            'notes',
+            'createdAt',
+            'updatedAt'
+          ];
+          return data.keys().hasAll(requiredKeys)
+            && data.keys().hasOnly(allowedKeys)
+            && data.id == recipeId
+            && data.uid == uid
+            && data.name is string && data.name.size() >= 1 && data.name.size() <= 200
+            && isPositiveNumber(data.servingsCount, 500)
+            && isNonNegativeNumber(data.totalWeightGrams, 100000)
+            && data.ingredients is list && data.ingredients.size() >= 1 && data.ingredients.size() <= 100
+            && isValidNutritionMap(data.nutritionPerServing)
+            && isValidDataQuality(data.dataQuality)
+            && isValidIsoString(data.createdAt)
+            && isValidIsoString(data.updatedAt)
+            && (!('notes' in data) || data.notes == null || (data.notes is string && data.notes.size() <= 1000));
+        }
+
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid) && isValidRecipe(request.resource.data);
+        allow update: if isOwner(uid)
+          && isValidRecipe(request.resource.data)
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.id == resource.data.id;
+        allow delete: if isOwner(uid);
+      }
+
+      // =======================================================================
+      // 4. Saved Meals / Custom Foods: users/{uid}/savedMeals/{mealId}
+      // =======================================================================
+      match /savedMeals/{mealId} {
+        function isValidSavedMeal(data) {
+          let requiredKeys = [
+            'id',
+            'uid',
+            'name',
+            'defaultQuantity',
+            'defaultUnit',
+            'servingGrams',
+            'servingDescription',
+            'nutrition',
+            'dataQuality',
+            'createdAt',
+            'updatedAt'
+          ];
+          let allowedKeys = [
+            'id',
+            'uid',
+            'name',
+            'brand',
+            'defaultQuantity',
+            'defaultUnit',
+            'servingGrams',
+            'servingDescription',
+            'nutrition',
+            'defaultMealType',
+            'dataQuality',
+            'notes',
+            'createdAt',
+            'updatedAt'
+          ];
+          return data.keys().hasAll(requiredKeys)
+            && data.keys().hasOnly(allowedKeys)
+            && data.id == mealId
+            && data.uid == uid
+            && data.name is string && data.name.size() >= 1 && data.name.size() <= 200
+            && isPositiveNumber(data.defaultQuantity, 10000)
+            && isValidUnit(data.defaultUnit)
+            && isNonNegativeNumber(data.servingGrams, 50000)
+            && data.servingDescription is string && data.servingDescription.size() <= 120
+            && isValidNutritionMap(data.nutrition)
+            && isValidDataQuality(data.dataQuality)
+            && isValidIsoString(data.createdAt)
+            && isValidIsoString(data.updatedAt)
+            && (!('brand' in data) || data.brand == null || (data.brand is string && data.brand.size() <= 120))
+            && (!('defaultMealType' in data) || data.defaultMealType == null || isValidMealType(data.defaultMealType))
+            && (!('notes' in data) || data.notes == null || (data.notes is string && data.notes.size() <= 500));
+        }
+
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid) && isValidSavedMeal(request.resource.data);
+        allow update: if isOwner(uid)
+          && isValidSavedMeal(request.resource.data)
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.id == resource.data.id;
+        allow delete: if isOwner(uid);
+      }
+
+      // =======================================================================
+      // 5. Weight Log Entries: users/{uid}/weightEntries/{entryId}
+      // =======================================================================
+      match /weightEntries/{entryId} {
+        function isValidWeightEntry(data) {
+          let requiredKeys = ['id', 'uid', 'date', 'weightKg', 'createdAt', 'updatedAt'];
+          let allowedKeys = ['id', 'uid', 'date', 'weightKg', 'notes', 'createdAt', 'updatedAt'];
+          return data.keys().hasAll(requiredKeys)
+            && data.keys().hasOnly(allowedKeys)
+            && data.id == entryId
+            && data.uid == uid
+            && isValidDateString(data.date)
+            && (data.weightKg is int || data.weightKg is float)
+            && data.weightKg >= 15 && data.weightKg <= 600
+            && isValidIsoString(data.createdAt)
+            && isValidIsoString(data.updatedAt)
+            && (!('notes' in data) || data.notes == null || (data.notes is string && data.notes.size() <= 300));
+        }
+
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid) && isValidWeightEntry(request.resource.data);
+        allow update: if isOwner(uid)
+          && isValidWeightEntry(request.resource.data)
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.id == resource.data.id;
+        allow delete: if isOwner(uid);
+      }
+    }
+
+    // Explicitly deny all access to any other collection or document path
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
